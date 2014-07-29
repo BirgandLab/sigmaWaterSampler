@@ -2,6 +2,21 @@
 #include "EEPROMAnything.h"
 #include "Chronodot.h"
 #include "Wire.h"
+#include "SD.h"
+
+
+
+ char systemLogFile[12] = "water.log"; //NAME FOR THE LOG FILE WRITTEN FOR THE 
+ char siteID[10] ="LAB";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
+#define chipSelect 10   
+ int samplesSinceLastPowerCycle=0;//keep track of when we lose power...just for fun
+ int error=0;
+int SI=1; //minutes between samples
+float VersionNumber=0.00;
+long int purgeTime=0; //run pump in reverse
+long int primeTime=0; //run pump forward to fill lines
+long int pumpTime=0;  //run pump forward to collect into bottle
+
 
 //INPUTS
 const int gray=            A1;
@@ -18,8 +33,8 @@ const int previousGapPin=  5;
 //OUTPUTS
 const int powerOpto=       A0;
 
-const int purge=            6;    //pump motor empty lines
-const int pump=             7;     //pump motor fill lines and bottles
+const int pump=            6;    //pump motor empty lines
+const int purge=             7;     //pump motor fill lines and bottles
 const int cw=               8;       //turn distributor arm clockwise
 const int ccw=              9;      //turn distributor arm counter clockwise
 
@@ -31,17 +46,22 @@ long int averageSeekTime;
  long int seekTime=0;
  long int sought=0;
 int incomingByte = 0; 
-
+Chronodot RTC;
 
 void setup(){
   Serial.begin(9600);
+  Wire.begin();              //turn on i2c bus
+  RTC.begin();               //turn the clock interface on
+  
 // OUTPUTS
  pinMode(powerOpto,OUTPUT);
  pinMode(pump,OUTPUT);
  digitalWrite(pump,HIGH);
+ pinMode(purge,OUTPUT);
+ digitalWrite(purge,HIGH);
  pinMode(cw,OUTPUT);
  pinMode(ccw,OUTPUT);
-  digitalWrite(cw,HIGH);
+ digitalWrite(cw,HIGH);
  digitalWrite(ccw,HIGH);
  
  
@@ -51,17 +71,42 @@ void setup(){
  pinMode(nextGapPin,INPUT);
  pinMode(previousGapPin,INPUT);
  
+ 
+ 	//ACTIVATE THE SD CARD
+    digitalWrite(chipSelect,HIGH);   //Tell the SD Card it is needed
+  
+      if (!SD.begin(chipSelect)) {//IF THE SD DOES NOT START
+          Serial.println("Card failed, or not present");
+          //errorCodes[0]=1;  //add error to code, 
+							//(although, it won't help, as they won't get logged ......
+          //return;
+        } //END  if (!SD.begin(chipSelect))
+
  //testSeekTime();
- EEPROM_readAnything(0, bottle);
+ EEPROM_readAnything(10, bottle);
 
  Serial.println(bottle);
- initializeSampler();
+ //initializeSampler();
  //findZero();
- EEPROM_writeAnything(0,bottle);
+ //EEPROM_writeAnything(10,bottle);
 }
 
 
 void loop(){
+     
+      if (get_unixtime()%(60)==0){           //EVERY ONCE IN A WHILE REPORT STATUS
+                 Serial.print("approximate time to next sample: ");
+                 Serial.println(SI-get_unixtime()%(SI*60)/60);//TIME TO NEXT SAMPLE
+                if (get_unixtime()%(SI*60)==0){
+                          sampleRoutine();
+                         // writeSystemLogFile();
+                }   //EVERY SAMPLE INTERVAL GET READY TO RUN
+                 timeStamp(); 
+                 //readSensors(sensorValues);  
+
+                 delay(900); //wait so the report is only given once
+               }//end get_unixtime()%(60)==0)
+		
             long int elapsed=0;
             long int sought=0;
            if(digitalRead(nextGapPin) &&counter==10){
@@ -117,6 +162,38 @@ void loop(){
         }
            
 }//end void loop
+
+void sampleRoutine(){
+   //PURGE LINE TO MAKE SURE IT IS EMPTY
+   Serial.println("purge");
+        systemPump(purge,purgeTime);
+        delay(300);
+   //PUMP TO PRIME LINES 
+  Serial.println("prime");
+        systemPump(pump,primeTime);   
+       delay(300); 
+   //PUMP INTO BOTTLE  
+  Serial.println("pump");
+        systemPump(pump,pumpTime);
+        delay(300);
+    //PURGE LINE TO MAKE SURE IT IS EMPTY
+   Serial.println("purge");
+        systemPump(purge,purgeTime);
+   Serial.println("write log file");
+        writeSystemLogFile();
+   Serial.println("advance distributor arm");
+        advance();
+        samplesSinceLastPowerCycle++;
+}
+
+void systemPump(int Direction, long int duration){
+         digitalWrite(Direction,LOW);
+              long int timer=millis();
+              while ((millis()-timer)<(duration*1000)){
+                //wait;
+              }
+        digitalWrite(Direction,HIGH); 
+}
 
 void advance(){
   long int timer=millis();
@@ -183,7 +260,7 @@ void advance(){
   
 //in all cases        
     timer=millis()-timer;                                     //TOTAL ELAPSED TIME OF THIS FUNCTION
-    EEPROM_writeAnything(0,bottle);                          //THE BOTTLE NUMBER WE THINK IT IS ON NOW
+    EEPROM_writeAnything(10,bottle);                          //THE BOTTLE NUMBER WE THINK IT IS ON NOW
     Serial.print("bottle #:"); Serial.println(bottle);
     if(tries==1){         //IF WE ONLY WENT THROUGH THE TRY LOOP ONCE
             seekTime+=timer;             //RETURN HOW LONG IT TOOK
@@ -254,7 +331,7 @@ void reverse(){
   
 //in all cases        
     timer=millis()-timer;                                     //TOTAL ELAPSED TIME OF THIS FUNCTION
-    EEPROM_writeAnything(0,bottle);                          //THE BOTTLE NUMBER WE THINK IT IS ON NOW
+    EEPROM_writeAnything(10,bottle);                          //THE BOTTLE NUMBER WE THINK IT IS ON NOW
     Serial.print("bottle #:"); Serial.println(bottle);
     if(tries==1){         //IF WE ONLY WENT THROUGH THE TRY LOOP ONCE
             seekTime+=timer;             //RETURN HOW LONG IT TOOK
@@ -307,7 +384,7 @@ void reverseGray(){
    // }
    // }
     Serial.print("bottle #:"); Serial.println(bottle);
-    EEPROM_writeAnything(0,bottle);
+    EEPROM_writeAnything(10,bottle);
     timer=millis()-timer; 
   }
   
@@ -356,7 +433,7 @@ void findZero(){
     Serial.println("gotIT");
     bottle=1;
     Serial.print("bottle #:"); Serial.println(bottle);
-    EEPROM_writeAnything(0,bottle);
+    EEPROM_writeAnything(10,bottle);
   }
   
   
@@ -495,3 +572,210 @@ void goToBottle(int target){
   }
   
 
+/**************************************************************************************/
+/**************************************************************************************/
+/**************************************************************************************/
+/**************************************************************************************/
+///PROVIDES SERIAL OUTPUT ABOUT TIME, TEMPERTURE AND THE LIKE
+///GOOD FOR MAKING SURE RTC IS RUNNING AND CYCLES ARE EXECUTING ACCORDING TO PLAN
+void timeStamp(){
+  DateTime  now = RTC.now();         //start clock object "now"
+  //Serial.println(timestamp);
+ Serial.print(now.year(), DEC);
+    Serial.print('/');
+    if(now.month() < 10) Serial.print("0");
+    Serial.print(now.month(), DEC);
+    Serial.print('/');
+    if(now.day() < 10) Serial.print("0");
+    Serial.print(now.day(), DEC);
+    Serial.print(' ');
+    if(now.hour() < 10) Serial.print("0");
+    Serial.print(now.hour(), DEC);
+    Serial.print(':');
+    if(now.minute() < 10) Serial.print("0");
+    Serial.print(now.minute(), DEC);
+    Serial.print(':');
+    if(now.second() < 10) Serial.print("0");
+    Serial.print(now.second(), DEC);
+    Serial.print("\t");
+
+    Serial.print(now.tempC(), 1);
+    Serial.println(" degrees Celcius");
+    //Serial.print(now.tempF(), DEC);
+    //Serial.println(" degrees Farenheit");
+    
+    Serial.println();
+}//END timeStamp() FUNCTION
+
+/**************************************************************************************/
+/**************************************************************************************/
+/**************************************************************************************/
+///WRITE DATA FROM ARDUINO SYSTEM TO THE LOG FILE THIS INCLUDES VARIABLES USED TO MAKE 
+///FPS COLLECTION DECISIONS, SYSTEM STATUS, TIME, RESTARTING, BATTERY LEVEL, TEMP
+///CUMULATIVE FLOW ETC. THUS IT WILL BE GOOD FOR TROUBLESHOOTING
+
+void writeSystemLogFile(){
+//PREPARED DATA FOR FILE HEADER ABBREVIATIONS OF VARIABLES AND UNITS ARE HERE 
+//EVERYTHING IS TAB DELIMITED, SO EXCEL SHOULD READ IT IN WELL
+//MUST BE CHANGED IF THE OUTPUTS ARE CHANGED
+
+    char* registerNames[]={"YYYY","MM","DD","HH","mm",
+                          "SS","siteID","ArdID","Ver","VBat",
+                          "DegC", "Bottle","error","powerCycle"};
+    char* units[]={"[YYYY]","[MM]","[DD]","[HH]","[mm]",
+                   "[SS]","[ID]","[ARD]","[Ver]","[v]",
+                   "[degC]","[#]","[0/1]","[0/1]"};
+                          
+        //File myFile = SD.open(systemLogFile, FILE_WRITE);
+  
+	if (!SD.exists(systemLogFile)){ 
+        Serial.println("make a new log file");					//IF THE LOG FILE DOES NOT EXIST
+		File dataFile=SD.open(systemLogFile,FILE_WRITE);//CREATE THE LOG FILE
+        
+                for (int j=0;j<=13;j++){							//FOR EACH LOG VARIABLE
+                      dataFile.print(registerNames[j]);			//PRINT A SHORT VARIABLE NAME
+                      dataFile.print("\t");      				//ADD A TAB
+                      }//END for (int j=0;j<30;j++)
+                      
+        		dataFile.print("\n");							//ADD NEWLINE
+        		
+                for (int j=0;j<13;j++){							//FOR EACH LOG VARIABLE
+                      dataFile.print(units[j]);					//PRINT UNITS
+                      dataFile.print("\t");      				//ADD A TAB
+                      } //END  for (int j=0;j<30;j++)
+                      
+               dataFile.print("\n");							//ADD A NEWLINE
+               dataFile.close();   								//CLOSE THE FILE
+       }//END 	if (!SD.exists(systemLogFile))
+  
+ 
+      char conversion[10];			        //MAKE A CONTAINER FOR CONVERSION
+	
+      DateTime now = RTC.now();				//PROVIDE CURRENT TIME FOR LOG FILE
+  
+      File dataFile=SD.open(systemLogFile, FILE_WRITE);   //open log file	  
+	
+          		 //IF THE DATA FILE OPENED WRITE DATA INTO IT
+			char dataString[27]; //A CONTAINER FOR THE FORMATTED DATE
+			dataFile.print("boogers");
+			//PRINT THE DATE (YYYY MM DD HH mm SS) TO dateString variable
+			int a = sprintf(dataString,"%d\t%02d\t%02d\t%02d\t%02d\t%02d\t",now.year(), 
+				now.month(), now.day(),now.hour(),now.minute(),now.second());
+			
+				
+			dataFile.print(dataString);	//WRITE THE DATE STRING TO THE LOG FILE	
+	/*		
+			dataFile.print(siteID);  	//write siteID TO THE LOG FILE
+			dataFile.print("\t");	 	//ADD A TAB
+			
+			char id[5];					//MAKE A VARIABLE FOR THE ARDUINO ID
+			EEPROM_readAnything(0, id);	//READ ARDUINO ID FROM EEPROM
+			dataFile.print(id);  		//write ArduinoID TO LOG FILE
+			dataFile.print("\t");		//ADD A TAB
+			
+			//dtostrf(VersionNumber,2,2,conversion); 	//CONVERT PROGRAM VERSION TO STRING
+			dataFile.print(conversion);				//WRITE TO LOG FILE
+			dataFile.print("\t");					//ADD A TAB
+			
+			//dtostrf(analogRead(A3),3,4,conversion);//CONVERT VOLTAGE TO STRING
+			dataFile.print(conversion);				//WRITE STRING TO LOG FILE
+			dataFile.print("\t");					//ADD A TAB
+		   
+			//dtostrf(get_tempRTC(),3,4,conversion);//CONVERT RTC DEG C TO STRING
+			dataFile.print(conversion);				//WRITE STRING TO LOG FILE
+			dataFile.print("\t");					//ADD A TAB
+           
+			dataFile.print(bottle);         //WRITE NUMBER OF FPS SAMPLES 
+													//COLLECTED IN THIS INTERVAL
+			dataFile.print("\t");					//ADD A TAB
+           							//WRITE CYCLES SINCE LAST PC
+           dataFile.print(samplesSinceLastPowerCycle);  
+           dataFile.print("\t"); 					//ADD A TAB
+          
+	   //dataFile.print(error);
+            dataFile.print("\t");					//THEN ADD A TAB
+            
+          dataFile.print("\n");  		//add final carriage return
+         */
+          dataFile.close();				//close file
+         
+          Serial.println("successfuADFALSDFJASile Writing");
+         // Serial.println(dataString);
+         
+	//	}//END if (dataFile)
+    
+  //Serial.println("successful File Writing");
+ 
+ 
+}//END void writeSystemLogFile(float waterDepth, float collect, int numberOfSamples)
+
+
+
+/**************************************************************************************/
+/***************** FUNCTION TO READ UNIXTIME FROM RTC *********************************/
+/**************************************************************************************/
+
+unsigned long int get_unixtime(){
+    DateTime  now = RTC.now();  //DECLARE A RTC OBJECT
+	unsigned long int time = now.unixtime();
+	return time;			//RETURN  TIME IN SECONDS SINCE 1/1/1970 00:00:00
+}//END unsigned long int get_unixTime()
+
+/**************************************************************************************/
+/************* FUNCTION TO READ TEMPERATURE IN C FROM RTC *****************************/
+/**************************************************************************************/
+
+float get_tempRTC(){
+	DateTime now = RTC.now();//DECLARE A RTC OBJECT
+	float tempC = now.tempC();
+	return tempC;			//RETURN THE TEMPERATURE
+	
+}//END float get_tempRTC()
+
+ /**************************************************************************************/
+/*********** FUNCTION TO READ BATTERY VOLATE FROM VOLTAGE DIVIDER *********************/
+/**************************************************************************************/
+ 
+float get_vBatt(){
+ float vBatt = (analogRead(VBat));	//READ BATTERY VALUE
+ float vBattF = (vBatt/1023*14.4*1.1);
+ return vBattF;			//RETURN CONVERTED TO VOLTS
+}//END float get_vBatt()
+
+/**************************************************************************************/
+/**************** FUNCTION TO READ STATUS OF FLOAT SWITCH *****************************/
+/**************************************************************************************/
+/*void convertTimeToEunuch(byte sec, byte min, byte hour, byte day, byte month, int year ){
+// converts time components to time_t 
+// note year argument is full four digit year (or digits since 2000), i.e.1975, (year 8 is 2008)
+  
+   int i;
+   time_t seconds;
+
+   if(year < 69) 
+      year+= 2000;
+    // seconds from 1970 till 1 jan 00:00:00 this year
+    seconds= (year-1970)*(60*60*24L*365);
+
+    // add extra days for leap years
+    for (i=1970; i<year; i++) {
+        if (LEAP_YEAR(i)) {
+            seconds+= 60*60*24L;
+        }
+    }
+    // add days for this year
+    for (i=0; i<month; i++) {
+      if (i==1 && LEAP_YEAR(year)) { 
+        seconds+= 60*60*24L*29;
+      } else {
+        seconds+= 60*60*24L*monthDays[i];
+      }
+    }
+
+    seconds+= (day-1)*3600*24L;
+    seconds+= hour*3600L;
+    seconds+= min*60L;
+    seconds+= sec;
+    return seconds; 
+}
+*/
