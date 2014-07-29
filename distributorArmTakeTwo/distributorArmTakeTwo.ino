@@ -1,15 +1,29 @@
 #include <EEPROM.h>
 #include "EEPROMAnything.h"
+#include "Chronodot.h"
+#include "Wire.h"
+
+//INPUTS
+const int gray=            A1;
+const int purple=          A2;
+const int VBat=            A3;
+//A4 SDA RTC
+//A5 SCL RTC
+
+const int pumpSwitch=      2;
+const int zeroPin=         3;
+const int nextGapPin=      4;
+const int previousGapPin=  5;
+
+//OUTPUTS
+const int powerOpto=       A0;
+
+const int purge=            6;    //pump motor empty lines
+const int pump=             7;     //pump motor fill lines and bottles
+const int cw=               8;       //turn distributor arm clockwise
+const int ccw=              9;      //turn distributor arm counter clockwise
 
 
-const int powerOpto=A0;
-const int gray=A1;
-const int purple=A2;
-const int cw=10;
-const int ccw=11;
-const int nextGapPin=4;
-const int previousGapPin=5;
-const int zeroPin=3;
 const int dangerZone=2000;
 int counter=0;
 int bottle;
@@ -21,22 +35,28 @@ int incomingByte = 0;
 
 void setup(){
   Serial.begin(9600);
+// OUTPUTS
  pinMode(powerOpto,OUTPUT);
- pinMode(gray,INPUT);
- pinMode(purple,INPUT);
+ pinMode(pump,OUTPUT);
+ digitalWrite(pump,HIGH);
  pinMode(cw,OUTPUT);
  pinMode(ccw,OUTPUT);
+  digitalWrite(cw,HIGH);
+ digitalWrite(ccw,HIGH);
+ 
+ 
+ pinMode(pumpSwitch,INPUT);
+ pinMode(gray,INPUT);
+ pinMode(purple,INPUT);
  pinMode(nextGapPin,INPUT);
  pinMode(previousGapPin,INPUT);
- digitalWrite(cw,HIGH);
- digitalWrite(ccw,HIGH);
- digitalWrite(nextGapPin,LOW);
+ 
  //testSeekTime();
  EEPROM_readAnything(0, bottle);
 
  Serial.println(bottle);
- //initializeSampler();
- findZero();
+ initializeSampler();
+ //findZero();
  EEPROM_writeAnything(0,bottle);
 }
 
@@ -56,14 +76,29 @@ void loop(){
              counter=0;
            }
            
+           if(digitalRead(pumpSwitch) &&counter==10){
+             Serial.println("pumpSwitch");
+             digitalWrite(pump,LOW);
+             while(digitalRead(pumpSwitch)) { 
+               delay(20);
+             }
+             digitalWrite(pump,HIGH);
+             counter=0;
+           }
+           
             if(digitalRead(previousGapPin) &&counter==10){
-             reverse();
+              if(bottle==2){
+                    findZero();
+                     }
+                if(bottle!=0){
+                   reverse();
+                    }
             Serial.println(averageSeekTime);
              counter=0;
            }
             
             
-            if(digitalRead(nextGapPin)||digitalRead(previousGapPin) ||digitalRead(zeroPin)){
+            if(digitalRead(nextGapPin)||digitalRead(previousGapPin) ||digitalRead(zeroPin) || digitalRead(pumpSwitch)){
               counter++;
             }
             else {
@@ -97,7 +132,7 @@ void advance(){
           reverse();
           reverse();
           findZero();
-          findZero();
+          //findZero();
         }
   if (bottle<24 && bail==0){
     //lets try 4x to get the rotor to the next bottle
@@ -173,11 +208,7 @@ void reverse(){
   int  success=0;
   int tries=0;
   int bail=0;
-  
-//IF at the end of the bottles rezero, but don't advance  
 
-    //lets try 4x to get the rotor to the next bottle
-   
  //TAKE 4 TRIES TO GET PAST ANY OBSTACLES  
     while(!success && tries<=2){
       //Serial.print("try ");
@@ -247,15 +278,6 @@ void reverseGray(){
   long int timer=millis(); //start a timer to keep track of seek time
   long int danger=millis();
   int bail=0; 
-  //  Serial.println("reverse");
- //IF ALREADY AT ZERO, DON"T DO MUCH
-    // if(bottle==0){
-     //   Serial.println("alread at zero");
-        //could add a re-zero here
-    //      }
- //IF NOT AT ZERO MOVE BACK ONE BOTTLE  
-   // if(bottle>0){
- //IF ON A GAP, MOVE OFF
             if(digitalRead(gray)==0){//if already on a gap
                 digitalWrite(ccw,LOW);
                 while(!digitalRead(gray)&&!bail){
@@ -293,11 +315,16 @@ void reverseGray(){
 void findZero(){
   long int danger=millis();
   int bail=0;
-  
-    if (bottle<22){
+    if(bottle==24){ //seems to find zero up there
+      reverse();
+      reverse();
+      
+    }
+    if(bottle<24 && bottle>=10){
+      reverse();
+    }
+    if (bottle<10){ //make sure it is far enough away from the 0 and get a seekTime measurement
          advance();
-     //     advance();
-      //    advance();
       moveForward(purple);
       moveForward(gray);
       moveForward(purple);
@@ -306,6 +333,8 @@ void findZero(){
     Serial.println("findZero");
     
     digitalWrite(ccw,LOW);
+    
+    //Wow thi is sorta dangerous
     while(digitalRead(gray) || digitalRead(purple)){
              delay(20);
             //  reverse(); 
@@ -334,7 +363,7 @@ void findZero(){
   void initializeSampler(){
           //long int seekTime=0;
           Serial.println("initializing sampler");
-          if(bottle<22){
+          if(bottle<20){
           advance();
           advance();
           averageSeekTime=floor(seekTime/sought);
@@ -346,8 +375,10 @@ void findZero(){
   }
   
     void moveBack(int color){
-    digitalWrite(ccw,LOW);
-     while(!digitalRead(color)){
+      long int danger=500;
+      long int watch=millis();
+      digitalWrite(ccw,LOW);
+     while(!digitalRead(color)&& ((millis()-watch)<danger)){
        delay(20);
      }
      digitalWrite(ccw,HIGH);
@@ -355,8 +386,10 @@ void findZero(){
   
     
     void moveForward(int color){
+      long int danger=500;
+      long int watch=millis();
     digitalWrite(cw,LOW);
-     while(!digitalRead(color)){
+     while(!digitalRead(color) && ((millis()-watch)<danger)){
        delay(20);
      }
      digitalWrite(cw,HIGH);
@@ -364,13 +397,24 @@ void findZero(){
   
 void goToBottle(int target){
   if(target==1){
+     while(target>2){
+       reverse();
+      }
+      
       findZero();
   }
   if(target!=1){
-    
     while(target>bottle){
+      long int time=millis();
+      digitalWrite(pump,LOW);
+      while ((millis()-time)<3000){
+        
+      }
+      digitalWrite(pump,HIGH);
+      
       advance();
     }
+    
     while(target<bottle){
       reverse();
     }
@@ -384,5 +428,70 @@ void goToBottle(int target){
     
   }
   
+  
+  
+  void simplerAdvanceFunction( ){
+    long int timer=millis();   //identify start time of function
+    long int timer2=millis();
+    long int minimumTotalSeekTime=floor(averageSeekTime*0.8);
+    int phase2Success=0;
+    int phase1Success=0;
+    long int phase1SeekTime=floor(averageSeekTime/3);
+    int phase2=0;
+     long int phase2SeekTime=floor(averageSeekTime/3);
+    int phase3=0;
+     long int phase3SeekTime=floor(averageSeekTime/3);
+    int plase4=0;
+     long int phase4SeekTime=floor(averageSeekTime/3);
+     
+            //if we find the next bottle too quickly, reverse, and try again
+            //failSave may require not backtracking more than incrementally (less than a bottle)
+            //we don't want to get in a position where we corrupt already collected samples
+    //turn on opto couplers
+    
+    
+          digitalWrite(cw,HIGH);
+          while( digitalRead(purple) && !digitalRead(gray) && ((millis()-timer2)<phase1SeekTime)){
+            delay(10);
+          }
+    digitalWrite(cw,LOW);
+    //If we got the anticipated phase change, it is a success
+          if(!digitalRead(purple) && !digitalRead(gray)){
+           phase1Success=1; 
+          }
+          
+      
+      
+          
+     digitalWrite(cw,HIGH);
+          timer2=millis();
+              while(!digitalRead(purple) && !digitalRead(gray) && ((millis()-timer2)<phase2SeekTime)){
+                delay(10);
+              }
+      digitalWrite(cw,LOW);
+    //If we got the anticipated phase change, it is a success
+          if(!digitalRead(purple) && digitalRead(gray)){
+           phase2Success=1; 
+          }
+
+    //the cycle would go from Purple Gray
+    //                          1     0 //front of gap this is where we usually stop
+    //                          0     0
+    //                          0     1//front of gap on second sensor
+    //                          0     0
+    //                          1     0
+    
+    
+    //possible moves: gray-move off gap 
+    //                gray-move to next gap
+    //                purple-move off gap
+    //                purple-move to next gap
+    // accomplish whole move in some time similar to average search time
+    //accomplish portions of the move in some time similar to their proportion
+    //Make several attempts to move past an obstacle
+    //make sure that enough time has passed so that false positives are unlikely
+       
+       //turn off opto couplers confident that the move has been made
+  }
   
 
