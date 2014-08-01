@@ -3,19 +3,20 @@
 #include "Chronodot.h"
 #include "Wire.h"
 #include "SD.h"
-
+#define chipSelect 10   
 
 
  char systemLogFile[12] = "water.log"; //NAME FOR THE LOG FILE WRITTEN FOR THE 
  char siteID[10] ="LAB";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
-#define chipSelect 10   
+
+
  int samplesSinceLastPowerCycle=0;//keep track of when we lose power...just for fun
  int error=0;
-int SI=1; //minutes between samples
+long int SI=5; //minutes between samples
 float VersionNumber=0.00;
-long int purgeTime=0; //run pump in reverse
-long int primeTime=0; //run pump forward to fill lines
-long int pumpTime=0;  //run pump forward to collect into bottle
+long int purgeTime=4; //run pump in reverse
+long int primeTime=5; //run pump forward to fill lines
+long int pumpTime=3;  //run pump forward to collect into bottle
 
 
 //INPUTS
@@ -63,6 +64,7 @@ void setup(){
  pinMode(ccw,OUTPUT);
  digitalWrite(cw,HIGH);
  digitalWrite(ccw,HIGH);
+ pinMode(chipSelect,OUTPUT);
  
  
  pinMode(pumpSwitch,INPUT);
@@ -94,17 +96,20 @@ void setup(){
 
 void loop(){
      
-      if (get_unixtime()%(60)==0){           //EVERY ONCE IN A WHILE REPORT STATUS
-                 Serial.print("approximate time to next sample: ");
-                 Serial.println(SI-get_unixtime()%(SI*60)/60);//TIME TO NEXT SAMPLE
+      if (get_unixtime()%(30)==0){           //EVERY ONCE IN A WHILE REPORT STATUS
+                  timeStamp();
+                 Serial.print("approximate time to next sample (seconds): ");
+                 Serial.println(SI-get_unixtime()%(SI*60));//TIME TO NEXT SAMPLE
                 if (get_unixtime()%(SI*60)==0){
                           sampleRoutine();
-                         // writeSystemLogFile();
+                        //  writeSystemLogFile();
+                        // samplesSinceLastPowerCycle++;
                 }   //EVERY SAMPLE INTERVAL GET READY TO RUN
-                 timeStamp(); 
+                  
                  //readSensors(sensorValues);  
-
-                 delay(900); //wait so the report is only given once
+                //writeSystemLogFile();
+                //samplesSinceLastPowerCycle++;
+                 delay(990); //wait so the report is only given once
                }//end get_unixtime()%(60)==0)
 		
             long int elapsed=0;
@@ -250,10 +255,14 @@ void advance(){
                       if(!bail && ((millis()-timer)>(averageSeekTime/2))){
                             bottle++; //update bottle number
                             success=1;  //it worked, don't try again
+                            error=0;
                             }
                        
                           tries++;  //augment counter, we might need to tray again
                           bail=0;    //RESET BAIL FOR ANOTHER TRY
+                          if (tries>=3){
+                           error=1; 
+                          }
                     }//while try and try again
                         
   }//end if bottle <23
@@ -615,56 +624,34 @@ void timeStamp(){
 ///CUMULATIVE FLOW ETC. THUS IT WILL BE GOOD FOR TROUBLESHOOTING
 
 void writeSystemLogFile(){
-//PREPARED DATA FOR FILE HEADER ABBREVIATIONS OF VARIABLES AND UNITS ARE HERE 
-//EVERYTHING IS TAB DELIMITED, SO EXCEL SHOULD READ IT IN WELL
-//MUST BE CHANGED IF THE OUTPUTS ARE CHANGED
-
-    char* registerNames[]={"YYYY","MM","DD","HH","mm",
+  
+char* registerNames[]={"YYYY","MM","DD","HH","mm",
                           "SS","siteID","ArdID","Ver","VBat",
-                          "DegC", "Bottle","error","powerCycle"};
-    char* units[]={"[YYYY]","[MM]","[DD]","[HH]","[mm]",
-                   "[SS]","[ID]","[ARD]","[Ver]","[v]",
-                   "[degC]","[#]","[0/1]","[0/1]"};
-                          
-        //File myFile = SD.open(systemLogFile, FILE_WRITE);
-  
-	if (!SD.exists(systemLogFile)){ 
-        Serial.println("make a new log file");					//IF THE LOG FILE DOES NOT EXIST
-		File dataFile=SD.open(systemLogFile,FILE_WRITE);//CREATE THE LOG FILE
-        
-                for (int j=0;j<=13;j++){							//FOR EACH LOG VARIABLE
+                          "DegC", "Bottle","powerCycle","error"};
+       
+char conversion[10];			        //MAKE A CONTAINER FOR CONVERSION
+                   
+  Serial.println("write data log file");
+   DateTime now = RTC.now();				//PROVIDE CURRENT TIME FOR LOG FILE
+   char dataString[27]; //A CONTAINER FOR THE FORMATTED DATE
+   int a = sprintf(dataString,"%d\t%02d\t%02d\t%02d\t%02d\t%02d\t",now.year(),now.month(), now.day(),now.hour(),now.minute(),now.second());
+   File dataFile = SD.open(systemLogFile, FILE_WRITE);
+   Serial.println(dataFile);
+  if (! dataFile) {
+    Serial.println("error opening datalog.txt");
+    // Wait forever since we cant write data
+    }else {
+    //Serial.println(registerNames);
+    if (samplesSinceLastPowerCycle==0){
+ for (int j=0;j<=13;j++){							//FOR EACH LOG VARIABLE
                       dataFile.print(registerNames[j]);			//PRINT A SHORT VARIABLE NAME
-                      dataFile.print("\t");      				//ADD A TAB
-                      }//END for (int j=0;j<30;j++)
-                      
-        		dataFile.print("\n");							//ADD NEWLINE
-        		
-                for (int j=0;j<13;j++){							//FOR EACH LOG VARIABLE
-                      dataFile.print(units[j]);					//PRINT UNITS
-                      dataFile.print("\t");      				//ADD A TAB
-                      } //END  for (int j=0;j<30;j++)
-                      
-               dataFile.print("\n");							//ADD A NEWLINE
-               dataFile.close();   								//CLOSE THE FILE
-       }//END 	if (!SD.exists(systemLogFile))
-  
- 
-      char conversion[10];			        //MAKE A CONTAINER FOR CONVERSION
-	
-      DateTime now = RTC.now();				//PROVIDE CURRENT TIME FOR LOG FILE
-  
-      File dataFile=SD.open(systemLogFile, FILE_WRITE);   //open log file	  
-	
-          		 //IF THE DATA FILE OPENED WRITE DATA INTO IT
-			char dataString[27]; //A CONTAINER FOR THE FORMATTED DATE
-			dataFile.print("boogers");
-			//PRINT THE DATE (YYYY MM DD HH mm SS) TO dateString variable
-			int a = sprintf(dataString,"%d\t%02d\t%02d\t%02d\t%02d\t%02d\t",now.year(), 
-				now.month(), now.day(),now.hour(),now.minute(),now.second());
-			
-				
-			dataFile.print(dataString);	//WRITE THE DATE STRING TO THE LOG FILE	
-	/*		
+                      dataFile.print("\t");      				//ADD A TAB						//ADD NEWLINE
+                     
+ }		
+  dataFile.print("\n");	
+    }				//AD
+    dataFile.print(dataString);
+    dataFile.print("\t");
 			dataFile.print(siteID);  	//write siteID TO THE LOG FILE
 			dataFile.print("\t");	 	//ADD A TAB
 			
@@ -673,15 +660,15 @@ void writeSystemLogFile(){
 			dataFile.print(id);  		//write ArduinoID TO LOG FILE
 			dataFile.print("\t");		//ADD A TAB
 			
-			//dtostrf(VersionNumber,2,2,conversion); 	//CONVERT PROGRAM VERSION TO STRING
+			dtostrf(VersionNumber,2,2,conversion); 	//CONVERT PROGRAM VERSION TO STRING
 			dataFile.print(conversion);				//WRITE TO LOG FILE
 			dataFile.print("\t");					//ADD A TAB
 			
-			//dtostrf(analogRead(A3),3,4,conversion);//CONVERT VOLTAGE TO STRING
+			dtostrf(analogRead(A3),3,4,conversion);//CONVERT VOLTAGE TO STRING
 			dataFile.print(conversion);				//WRITE STRING TO LOG FILE
 			dataFile.print("\t");					//ADD A TAB
 		   
-			//dtostrf(get_tempRTC(),3,4,conversion);//CONVERT RTC DEG C TO STRING
+			dtostrf(get_tempRTC(),3,4,conversion);//CONVERT RTC DEG C TO STRING
 			dataFile.print(conversion);				//WRITE STRING TO LOG FILE
 			dataFile.print("\t");					//ADD A TAB
            
@@ -692,21 +679,16 @@ void writeSystemLogFile(){
            dataFile.print(samplesSinceLastPowerCycle);  
            dataFile.print("\t"); 					//ADD A TAB
           
-	   //dataFile.print(error);
+	   dataFile.print(error);
             dataFile.print("\t");					//THEN ADD A TAB
             
           dataFile.print("\n");  		//add final carriage return
-         */
-          dataFile.close();				//close file
-         
-          Serial.println("successfuADFALSDFJASile Writing");
-         // Serial.println(dataString);
-         
-	//	}//END if (dataFile)
+  
     
-  //Serial.println("successful File Writing");
- 
- 
+     dataFile.flush();
+    }
+dataFile.close();
+  
 }//END void writeSystemLogFile(float waterDepth, float collect, int numberOfSamples)
 
 
