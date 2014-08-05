@@ -3,57 +3,21 @@
 #include "Chronodot.h"
 #include "Wire.h"
 #include "SD.h"
-
-#define chipSelect 10
-#define LEAP_YEAR(_year) ((_year%4)==0)
+#define chipSelect 10   
 
 
-char systemLogFile[12] = "log.log"; //NAME FOR THE LOG FILE WRITTEN FOR THE 
-String siteID ="DEFAULT";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
+ char systemLogFile[12] = "water.log"; //NAME FOR THE LOG FILE WRITTEN FOR THE 
+ char siteID[10] ="LAB";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
 
-///Parameters to be loaded from the SD card configuration file
-///so far these are not actively used in the program
-///need to add function call and mechanism to utilize data (either as the structure
-///or assign data from structure to global variables
 
-struct missionData {
-  String siteID;			//short site identification name
-  ///Main Sample System Timing Variables
-  int PumpTime;//Time to run pump to fill lines with fresh sample water (seconds)
-  int PurgeTime;//Time to run pump (reverse) to purge lines and vessel (seconds)
-  int PrimeTime;
-  int sampleInterval;			//interval at which to pump to Manta system in absence of scan signal
-  int startDay;
-  int startHour;
-  int startMinute;
-  int startSecond;
-  int startMonth;
-  int startYear;
-  int startBottle;
-} missionData;
-
-int PumpTime;//Time to run pump to fill lines with fresh sample water (seconds)
-int PurgeTime;//Time to run pump (reverse) to purge lines and vessel (seconds)
-int PrimeTime;
-int startDay;
-int startHour;
-int startMinute;
-int startSecond;
-int startMonth;
-int startYear;
-int fudge=0;
-int completedCycle=0;
-int startBottle=1;
-
-//ERROR KEEPING VARIABLES
-int clockError=0;
-int powerCycle=0;
-int SDError=0;
-int error=0;
-int samplesSinceLastPowerCycle=0;//keep track of when we lose power...just for fun
-
-//program version
+ int samplesSinceLastPowerCycle=0;//keep track of when we lose power...just for fun
+ int error=0;
+long int SI=5; //minutes between samples
 float VersionNumber=0.00;
+long int purgeTime=4; //run pump in reverse
+long int primeTime=5; //run pump forward to fill lines
+long int pumpTime=3;  //run pump forward to collect into bottle
+
 
 //INPUTS
 const int gray=            A1;
@@ -80,196 +44,76 @@ const int dangerZone=2000;
 int counter=0;
 int bottle;
 long int averageSeekTime;
-long int seekTime=0;
-long int sought=0;
-
-
-long int startTime;
-long int nextSample;
-int powerCycleEEP;
-long int nextSampleEEP;
-long int startTimeEEP;
-
-int sampleCounterEEP;
-
-long int firstSample;
-int sampleCycleCounter=0;
-
-
-int sampleInterval=2;
-
-
+ long int seekTime=0;
+ long int sought=0;
+int incomingByte = 0; 
 Chronodot RTC;
- DateTime now;
 
 void setup(){
-                Serial.begin(9600);
-                Wire.begin();              //turn on i2c bus
-                RTC.begin();               //turn the clock interface on
-                now= RTC.now();            //get the current time   
-                      if (now.year()==2000){
-                        //the clock has lost its time
-                        clockError=1;
-                      }
-                      
-                      
-//EEPROM_writeAnything(60,0);         
-//EEPROM_writeAnything(10,1);                    ///recall the last bottle filled
-//EEPROM_writeAnything(14,0);            //recall whether or not a complete cycle had been run
-//EEPROM_writeAnything(20,0);                 //recall start time
-//EEPROM_writeAnything(40,0);                //recall the time for the next sample
+  Serial.begin(9600);
+  Wire.begin();              //turn on i2c bus
+  RTC.begin();               //turn the clock interface on
+  
+// OUTPUTS
+ pinMode(powerOpto,OUTPUT);
+ pinMode(pump,OUTPUT);
+ digitalWrite(pump,HIGH);
+ pinMode(purge,OUTPUT);
+ digitalWrite(purge,HIGH);
+ pinMode(cw,OUTPUT);
+ pinMode(ccw,OUTPUT);
+ digitalWrite(cw,HIGH);
+ digitalWrite(ccw,HIGH);
+ pinMode(chipSelect,OUTPUT);
+ 
+ 
+ pinMode(pumpSwitch,INPUT);
+ pinMode(gray,INPUT);
+ pinMode(purple,INPUT);
+ pinMode(nextGapPin,INPUT);
+ pinMode(previousGapPin,INPUT);
+ 
+ 
+ 	//ACTIVATE THE SD CARD
+    digitalWrite(chipSelect,HIGH);   //Tell the SD Card it is needed
+  
+      if (!SD.begin(chipSelect)) {//IF THE SD DOES NOT START
+          Serial.println("Card failed, or not present");
+          //errorCodes[0]=1;  //add error to code, 
+							//(although, it won't help, as they won't get logged ......
+          //return;
+        } //END  if (!SD.begin(chipSelect))
 
-              // OUTPUTS
-               pinMode(powerOpto,OUTPUT);
-               pinMode(pump,OUTPUT);
-               digitalWrite(pump,HIGH);
-               pinMode(purge,OUTPUT);
-               digitalWrite(purge,HIGH);
-               pinMode(cw,OUTPUT);
-               pinMode(ccw,OUTPUT);
-               digitalWrite(cw,HIGH);
-               digitalWrite(ccw,HIGH);
-               pinMode(chipSelect,OUTPUT);
-               
-               
-               pinMode(pumpSwitch,INPUT);
-               pinMode(gray,INPUT);
-               pinMode(purple,INPUT);
-               pinMode(nextGapPin,INPUT);
-               pinMode(previousGapPin,INPUT);
-               
-               
-               	//ACTIVATE THE SD CARD
-                  digitalWrite(chipSelect,HIGH);   //Tell the SD Card it is needed
-                    if (!SD.begin(chipSelect)) {//IF THE SD DOES NOT START
-                        Serial.println("Card failed, or not present");
-                      } //END  if (!SD.begin(chipSelect))
-                      
-               //GET SETTINGS FROM SD CARD
-                getSettings();
-                
-               //testSeekTime();
-               
-               nextSample=makeTime(startSecond,startMinute,startHour,startDay,startMonth,startYear);
-                  if (nextSample<now.unixtime() && !completedCycle){
-                         while (nextSample<now.unixtime()){
-                           fudge++; //keep track of when time has to be added to clock. fudge could turn into pickle, or kettle of fish
-                           Serial.println(nextSample);
-                           nextSample+=sampleInterval*60;
-                           } 
-                  } 
-                EEPROM_readAnything(10, bottle);
-                EEPROM_readAnything(10,bottle);                    ///recall the last bottle filled
-                EEPROM_readAnything(14,completedCycle);            //recall whether or not a complete cycle had been run
-                //if bottle==24 or completedCyle==1 there is a good chance the sample cycle is over
-                //similarly, if nextSample>startTime+24*sampleInterval, there is a good chance something has gone wrong
-                //it is possible that 1.) lost power and missed some samples--check lost power data
-                //                    2.) is is possible that the cycle is over
-                //                    3.) it is possible that a sample wasn't taken because there was no water to draw (although this isn't built in yet)
-                //                    4.) it is possible that there was a memory writing problem--in that case the number should be utter bullshit, and maybe distinguishable from first principles
-                //                    5.) it is possible that the RTC has shit the bed. in that case, we need to come up with an auxiliary plan to implement
-                //                          which could mean just taking the sample interval from elapsed time (in the case of no power failure)
-                EEPROM_readAnything(20,startTimeEEP);                 //recall start time
-                EEPROM_readAnything(40,nextSampleEEP);                //recall the time for the next sample
-                Serial.println("EEPROM data:");
-                Serial.print("sampleCounterEEP: ");         Serial.print(sampleCounterEEP); Serial.print("\n");
-                Serial.print("bottle: ");                   Serial.print(bottle);           Serial.print("\n");
-                Serial.print("completedCycle: ");           Serial.print(completedCycle);   Serial.print("\n");
-                Serial.print("startTime: ");                Serial.print(startTimeEEP);     Serial.print("\n");
-                Serial.print("nextSample: ");               Serial.print(nextSampleEEP);    Serial.print("\n");
-                nextSample=nextSampleEEP;
-                
-                
-                //USE START TIME FROM SD CARD TO CALCULATE THE START TIME
-                startTime=makeTime(startSecond,startMinute,startHour,startDay,startMonth,startYear); // this assumes a new mission
-                if(startTime==startTimeEEP){
-                             //not a new mission
-                            Serial.println("not a new missions--same start time"); 
-                          }
-                
-                if(startTime!=startTimeEEP){
-                                       if (startTime>startTimeEEP){
-                                                   Serial.println("more recent start time on file than in log");
-                                                   Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
-                                                   findZero();
-                                                   goToBottle(startBottle);
-                                                   EEPROM_writeAnything(20,startTime);      //update start time in memory
-                                                   nextSample=startTime;                    //update next sample time
-                                                   EEPROM_writeAnything(40,nextSample);
-                                                   EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
-                                                 }
-                                       if(startTime<startTimeEEP){
-                                                          Serial.println("start time is earlier than the one in memory, this is odd ...");
-                                                          
-                                                           Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
-                                                       findZero();
-                                                       goToBottle(startBottle);
-                                                       EEPROM_writeAnything(20,startTime);      //update start time in memory
-                                                       nextSample=startTime;                    //update next sample time
-                                                       EEPROM_writeAnything(40,nextSample);
-                                                       EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
-                                                         //could be the result of changing ones mind about deployment timing. 
-                                                         //Perhaps the default should be to accept it as a change of plan, a change in mission. 
-                                                      }
-                          }
-    
-                 
-                          if (nextSampleEEP>nextSample){
-                                      Serial.println("calculated next sample is earlier than the one in EEPROM");
-                                      //write an error message
-                                      EEPROM_writeAnything(40,nextSample);
-                                      //the time in memory for the next sample is in the future, this could indicate 
-                                      //1.) a new program
-                                      //2.) a power cycle
-                                      //3.) a loss of rtc function
-                                      if (clockError==1){
-                                        //enter contingency plan
-                                        Serial.println("enter sampling contingency plan");
-                                       
-                                      }
-                                    }
-                 
-                   //Serial.println(nextSample);
-                             if (nextSample<now.unixtime() && !completedCycle){
-                                           Serial.println("next sample is before *now* ");
-                                                 while (nextSample<now.unixtime()){
-                                                   Serial.println("push-up next sample");
-                                                   fudge++; //keep track of when time has to be added to clock. fudge could turn into pickle, or kettle of fish
-                                                   nextSample+=sampleInterval*60;    
-                                                    Serial.print(now.unixtime()); Serial.print(" ");
-                                                    Serial.print(nextSample); Serial.print(" ");
-                                                    Serial.print(now.unixtime()-nextSample); Serial.print("\n");     
-                                           } 
-                                           Serial.println(nextSample);
-                                           EEPROM_writeAnything(40,nextSample);
-                                         }
- }
+ //testSeekTime();
+ EEPROM_readAnything(10, bottle);
+
+ Serial.println(bottle);
+ //initializeSampler();
+ //findZero();
+ //EEPROM_writeAnything(10,bottle);
+}
+
 
 void loop(){
-  
-    if (get_unixtime()==nextSample){
-               if(completedCycle==0){
-          //                sampleRoutine();
-                     }
-               //if(completedCycle==1){
-               //    Serial.println("write log file");
-               //    writeSystemLogFile();
-               //      }
-               delay(1000);
-        }   //EVERY SAMPLE INTERVAL GET READY TO RUN
-                
-  /*              
+     
       if (get_unixtime()%(30)==0){           //EVERY ONCE IN A WHILE REPORT STATUS
                   timeStamp();
                  Serial.print("approximate time to next sample (seconds): ");
-                 Serial.println(sampleInterval-get_unixtime()%(sampleInterval*60));//TIME TO NEXT SAMPLE
-                
+                 Serial.println(SI-get_unixtime()%(SI*60));//TIME TO NEXT SAMPLE
+                if (get_unixtime()%(SI*60)==0){
+                          sampleRoutine();
+                        //  writeSystemLogFile();
+                        // samplesSinceLastPowerCycle++;
+                }   //EVERY SAMPLE INTERVAL GET READY TO RUN
+                  
+                 //readSensors(sensorValues);  
+                //writeSystemLogFile();
+                //samplesSinceLastPowerCycle++;
                  delay(990); //wait so the report is only given once
                }//end get_unixtime()%(60)==0)
 		
             long int elapsed=0;
             long int sought=0;
-    /*        
            if(digitalRead(nextGapPin) &&counter==10){
             advance();
             Serial.println(averageSeekTime);
@@ -311,11 +155,9 @@ void loop(){
               counter=0;
               }
               
-              
-              
            if (Serial.available() > 0) {
                 // read the incoming byte:
-                char incomingByte = Serial.parseInt();
+                incomingByte = Serial.parseInt();
                 // say what you got:
                 Serial.print("I received: ");
                 Serial.println(incomingByte, DEC);
@@ -323,43 +165,30 @@ void loop(){
                 goToBottle(incomingByte);
                 }
         }
-         */  
-        
+           
 }//end void loop
-
-
-
-
-
 
 void sampleRoutine(){
    //PURGE LINE TO MAKE SURE IT IS EMPTY
    Serial.println("purge");
-        systemPump(purge,PurgeTime);
+        systemPump(purge,purgeTime);
         delay(300);
    //PUMP TO PRIME LINES 
   Serial.println("prime");
-        systemPump(pump,PrimeTime);   
+        systemPump(pump,primeTime);   
        delay(300); 
    //PUMP INTO BOTTLE  
   Serial.println("pump");
-        systemPump(pump,PumpTime);
+        systemPump(pump,pumpTime);
         delay(300);
     //PURGE LINE TO MAKE SURE IT IS EMPTY
    Serial.println("purge");
-        systemPump(purge,PurgeTime);
+        systemPump(purge,purgeTime);
    Serial.println("write log file");
         writeSystemLogFile();
    Serial.println("advance distributor arm");
-   if (bottle==24){
-     completedCycle=1;
-     EEPROM_writeAnything(14,completedCycle);
-   }
         advance();
         samplesSinceLastPowerCycle++;
-        nextSample=nextSample+sampleInterval*60;
-        EEPROM_writeAnything(40,nextSample);
-        EEPROM_writeAnything(60,samplesSinceLastPowerCycle);
 }
 
 void systemPump(int Direction, long int duration){
@@ -524,6 +353,50 @@ void reverse(){
              // return averageSeekTime;                        //OTHERWISE, RETURN THIS, CUZ IT IS THE BEST ESTIMATE OF GOOD SEEK TIME
             }
   }
+
+
+
+
+
+
+
+void reverseGray(){
+  long int timer=millis(); //start a timer to keep track of seek time
+  long int danger=millis();
+  int bail=0; 
+            if(digitalRead(gray)==0){//if already on a gap
+                digitalWrite(ccw,LOW);
+                while(!digitalRead(gray)&&!bail){
+                        if((millis()-danger)>dangerZone){
+                              bail=1; 
+                              Serial.println("bail!!!");
+                            }
+                        }//END WHILE (!digitalRead(gray)&&!bail)
+                digitalWrite(ccw,HIGH);
+                }//end if digitalRead(gray)==0;
+                
+          danger=millis();
+          
+//NOW SEARCH FOR NEXT GAP
+           while(digitalRead(gray) && !bail){
+                      digitalWrite(ccw,LOW);
+                     if ((millis()-danger)>dangerZone){
+                             bail=1;
+                             Serial.println("bail!!!");
+                           }
+           // delay(30);//WAIT A BIT TO GET IN THE MIDDLE OF THE GAP
+    }
+    digitalWrite(ccw,HIGH);
+   // Serial.println("gotIT");
+   // if(!bail && color==purple){
+   //     bottle--;
+   // }
+   // }
+    Serial.print("bottle #:"); Serial.println(bottle);
+    EEPROM_writeAnything(10,bottle);
+    timer=millis()-timer; 
+  }
+  
   
 void findZero(){
   long int danger=millis();
@@ -572,7 +445,7 @@ void findZero(){
     EEPROM_writeAnything(10,bottle);
   }
   
-  /*
+  
   void initializeSampler(){
           //long int seekTime=0;
           Serial.println("initializing sampler");
@@ -586,7 +459,7 @@ void findZero(){
     findZero();
      
   }
-  */
+  
     void moveBack(int color){
       long int danger=500;
       long int watch=millis();
@@ -640,7 +513,74 @@ void goToBottle(int target){
       
     
   }
- 
+  
+  
+  
+  void simplerAdvanceFunction( ){
+    long int timer=millis();   //identify start time of function
+    long int timer2=millis();
+    long int minimumTotalSeekTime=floor(averageSeekTime*0.8);
+    int phase2Success=0;
+    int phase1Success=0;
+    long int phase1SeekTime=floor(averageSeekTime/3);
+    int phase2=0;
+     long int phase2SeekTime=floor(averageSeekTime/3);
+    int phase3=0;
+     long int phase3SeekTime=floor(averageSeekTime/3);
+    int plase4=0;
+     long int phase4SeekTime=floor(averageSeekTime/3);
+     
+            //if we find the next bottle too quickly, reverse, and try again
+            //failSave may require not backtracking more than incrementally (less than a bottle)
+            //we don't want to get in a position where we corrupt already collected samples
+    //turn on opto couplers
+    
+    
+          digitalWrite(cw,HIGH);
+          while( digitalRead(purple) && !digitalRead(gray) && ((millis()-timer2)<phase1SeekTime)){
+            delay(10);
+          }
+    digitalWrite(cw,LOW);
+    //If we got the anticipated phase change, it is a success
+          if(!digitalRead(purple) && !digitalRead(gray)){
+           phase1Success=1; 
+          }
+          
+      
+      
+          
+     digitalWrite(cw,HIGH);
+          timer2=millis();
+              while(!digitalRead(purple) && !digitalRead(gray) && ((millis()-timer2)<phase2SeekTime)){
+                delay(10);
+              }
+      digitalWrite(cw,LOW);
+    //If we got the anticipated phase change, it is a success
+          if(!digitalRead(purple) && digitalRead(gray)){
+           phase2Success=1; 
+          }
+
+    //the cycle would go from Purple Gray
+    //                          1     0 //front of gap this is where we usually stop
+    //                          0     0
+    //                          0     1//front of gap on second sensor
+    //                          0     0
+    //                          1     0
+    
+    
+    //possible moves: gray-move off gap 
+    //                gray-move to next gap
+    //                purple-move off gap
+    //                purple-move to next gap
+    // accomplish whole move in some time similar to average search time
+    //accomplish portions of the move in some time similar to their proportion
+    //Make several attempts to move past an obstacle
+    //make sure that enough time has passed so that false positives are unlikely
+       
+       //turn off opto couplers confident that the move has been made
+  }
+  
+
 /**************************************************************************************/
 /**************************************************************************************/
 /**************************************************************************************/
@@ -821,197 +761,3 @@ float get_vBatt(){
     return seconds; 
 }
 */
-
-
-
-long int makeTime(byte sec, byte min, byte hour, byte day, byte month, int year ){
-// converts time components to time_t 
-// note year argument is full four digit year (or digits since 2000), i.e.1975, (year 8 is 2008)
-static  byte monthDays[]={31,28,31,30,31,30,31,31,30,31,30,31};
-
-   int i;
-   long int  seconds;
-   if(year < 69) 
-      year+= 2000;
-    // seconds from 1970 till 1 jan 00:00:00 this year
-    seconds= (year-1970)*(60*60*24L*365);
-    // add extra days for leap years
-
-    for (i=1970; i<year; i++) {
-
-        if (LEAP_YEAR(i)) {
-            seconds+= 60*60*24L;
-        }
-    }
-
-    // add days for this year
-    for (i=0; i<(month-1); i++) {
-          if (i==1 && LEAP_YEAR(year)) { 
-                seconds+= 60*60*24L*29;
-          } else {
-            seconds+= 60*60*24L*monthDays[i];
-          }
-        }
-
-    seconds+= (day-1)*3600*24L;
-    seconds+= hour*3600L;
-    seconds+= min*60L;
-    seconds+= sec;
-    return seconds; 
-}
-
-
-/**************************************************************************************/
-/**************************************************************************************/
-/**************************************************************************************/
-/**************************************************************************************/
- ///READ THE IMPORTANT SYSTEM PROGRAMMING VARIABLES FROM A TEXT FILE LOCATED IN THE ROOT 
- ///DIRECTORY OF THE SD CARD.  THIS ENABLES THE USER TO NOT CONTIUNUALLY RELOAD THE FPS
- ///CORE PROGRAM ON THE ARDUINO. INSTEAD BY EDITING THE CONFIG FILE, AND RESTARTING THE
- ///SYSTEM PUMPING TIMES AND THRESHOLD VALUES CAN BE CHANGED AND TWEAKED
- 
- void getSettings(){
-  Serial.println("Loading Configuration");
- // Open the settings file for reading:
-   File myFile;						//DECLARE A FILE
-  myFile = SD.open("go.txt");		                //OPEN THE FILE
-  if(myFile){						//IF THE FILE OPENS PROCEED WITH PARSING DATA
-  Serial.println("File Opened");	                //GIVE SOME FEEDBACK
-  char character;					//AN EMPTY CHARACTER
-  String description;		        	        //AND EMPTY STRING
-  String value;			        	        //ANOTHER EMPTY STRING
-  boolean valid = true;				        //BOOL FOR EVALUATING STATMENTS
-  
-  
-          while (myFile.available()) { //READ FROM THE FILE UNTIL ITS EMPTY
-            character = myFile.read(); //READ FIRST CHAR OF LINE
-                if(character == '/') { //IF ITS A COMMENT READ THE WHOLE LINE
-                    while(character != '\n'){
-                            character = myFile.read();
-                        }//END  while(character != '\n')
-                   }//END if(character == '/')
-				   
-				//IF IT ISN'T A COMMENT, IT IS THE VARIABLE NAME
-                else if(isalnum(character)) {//ADD EACH CHARACTER TO THE DESCRIPTION
-                           description.concat(character);
-                    } 
-                else if(character =='=') {//IF IT IS AN EQUALS SIGN, 
-										  //END THE VARIABLE NAME AND READ THE VALUE
-                        Serial.print(description);
-                        Serial.print(": ");
-                          // START CHECKING THE VALUE FOR POSSIBLE RESULTS
-                          // FIRST GOING TO TRIM OUT ALL TRAILING WHITE SPACES
-                          do { character = myFile.read();
-                                } while(character == ' ');
-						  //EMPTY THE VALUE PARAMETER
-                                  value = ""; 
-                          //READ IN THE REST OF THE LINE
-						  //WHILE THE LINE ISN'T OVER AND DATA REMAINS IN THE FILE
-						  //CONTINUTE CONCATENATING CHARACTERS
-								  while(character != '\n' && myFile.available()) { 
-								            value.concat(character);               
-                                            character = myFile.read();
-                                      }//end while(character != '\n')
-							//CREATE A BUFFER TO HOLD THE ASSEMBLED DATA
-                                  char charBuf[value.length()+1];         
-							//CONVER THE VALUE TO SOMETHING USEABLE  
-                                  value.toCharArray(charBuf,value.length()+1);
-                                  Serial.print(charBuf);
-                                  Serial.println();
-           
-              //VALUE PAIR SHOULD BE CAPTURED AT THIS POINT
-              //ASSIGN THEM TO REAL VARIABLES, OR TO A STRUCTURE
-			  //BY MATCHING DESCRIPTION AND VARIABLE NAMES
-                                  if (description == "siteID"){
-                                    missionData.siteID=value;
-                                  }//END  if (description == "siteID")
-                                  else if (description == "PumpTime"){
-                                    missionData.PumpTime=atoi(charBuf);
-                                  }//END  if (description == "pumpTIme")
-                                  else if (description == "PurgeTime"){
-                                   missionData.PurgeTime=atoi(charBuf);
-                                  } //END else if (description == "PurgeTime")
-                                   else if (description == "PrimeTime"){
-                                   missionData.PrimeTime=atoi(charBuf);
-                                  } //END else if (description == "PrimeTime")
-                                   else if (description == "sampleInterval"){
-                                    missionData.sampleInterval=atoi(charBuf);
-                                  } //END else if (description == "sampleInterval")
-                                   else if (description == "startDay"){
-                                    missionData.startDay=atoi(charBuf);
-                                  } //END  else if (description == "startDay")
-                                  else if (description == "startHour"){
-                                    missionData.startHour=atoi(charBuf);
-                                  } //END else if (description == "startHour")
-                                  else if (description == "startMinute"){
-                                   missionData.startMinute=atoi(charBuf);
-                                  } //END else if (description == "startMinute")
-                                   else if (description == "startSecond"){
-                                    missionData.startSecond=atoi(charBuf);
-                                  } //END  else if (description == "startSecond")
-                                   else if (description =="startYear"){
-                                    missionData.startYear=atoi(charBuf);
-                                   }
-                                   else if (description =="startMonth"){
-                                     missionData.startMonth=atoi(charBuf);
-                                   }                                  
-                                   else if (description =="startBottle"){
-                                    missionData.startBottle=atoi(charBuf);
-                                   }
-                                  else{ 
-                                    Serial.println("mismatch-look for a typo");
-                                  } //END ELSE
- 
-                                  description="";
-                                       }//end   else if(character =='=')
-            //reset description
-    }//end while (myFile.available())
-    
-    myFile.close();					// close the file:
-    Serial.println("File closed");	// REPORT SUCCESS
-    Serial.println("assigned parameters: ");
-    
-    siteID=missionData.siteID;
-    PumpTime=missionData.PumpTime;
-    PurgeTime=missionData.PurgeTime;
-    sampleInterval=missionData.sampleInterval;
-    startDay=missionData.startDay;
-    startHour=missionData.startHour;
-    startMonth=missionData.startMonth;
-    startYear=missionData.startYear;
-    startMinute=missionData.startMinute;
-    startSecond=missionData.startSecond;
-    startBottle=missionData.startBottle;
-  }//end  if(myFile)
-  else {
-    Serial.println("didn't open!");	//REPORT FAILURE
-  } //END else
-  Serial.print("siteID: ");            Serial.print(siteID);             Serial.println();
-  Serial.print("PumpTime: ");          Serial.print(PumpTime);             Serial.println();
-  Serial.print("PurgeTime: ");         Serial.print(PurgeTime);            Serial.println();
-  Serial.print("PrimeTime: ");         Serial.print(PrimeTime);            Serial.println();
-  Serial.print("SampleInterval: ");    Serial.print(sampleInterval);       Serial.println();
-  Serial.print("startYear: ");         Serial.print(startYear);            Serial.println();
-  Serial.print("startMonth: ");        Serial.print(startMonth);           Serial.println();
-  Serial.print("startDay: ");          Serial.print(startDay);             Serial.println();
-  Serial.print("startHour: ");         Serial.print(startHour);            Serial.println();
-  Serial.print("startMinute: ");       Serial.print(startMinute);          Serial.println();
-  Serial.print("startSecond: ");       Serial.print(startSecond);          Serial.println();
-  Serial.print("startBottle: ");       Serial.print(startBottle);          Serial.println();
-   
-  }//end getSettings() FUNCTION
-  
-  
-/**************************************************************************************/
-/**************************************************************************************/
-/**************************************************************************************/
-/**************************************************************************************/
-void difference(long int one, long int two){    //two is "now" and one is nextSample
-    int hours=floor((one-two)/3600);
-    int minutes=floor(((one-two)%3600)/60);
-    int seconds=(one-two)%60;
-    char countDown[10];
-    int a=sprintf(countDown,"%02d:%02d:%02d",hours,minutes,seconds);
-    
-   Serial.println(countDown);
-    }
