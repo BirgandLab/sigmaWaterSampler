@@ -4,12 +4,12 @@
 #include "Wire.h"
 #include "SD.h"
 
-#define chipSelect 10
+const int chipSelect=10;
 #define LEAP_YEAR(_year) ((_year%4)==0)
 
 
 char systemLogFile[12] = "log.log"; //NAME FOR THE LOG FILE WRITTEN FOR THE 
-String siteID ="DEFAULT";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
+String siteID ="DEFAUL";           //NAME FOR THE SITE TO BE INCLUDED IN SYSTEM 
 
 ///Parameters to be loaded from the SD card configuration file
 ///so far these are not actively used in the program
@@ -71,7 +71,7 @@ const int previousGapPin=  5;
 const int powerOpto=       A0;
 
 const int pump=            6;    //pump motor empty lines
-const int purge=             7;     //pump motor fill lines and bottles
+const int purge=           7;     //pump motor fill lines and bottles
 const int cw=               8;       //turn distributor arm clockwise
 const int ccw=              9;      //turn distributor arm counter clockwise
 
@@ -89,9 +89,7 @@ long int nextSample;
 int powerCycleEEP;
 long int nextSampleEEP;
 long int startTimeEEP;
-
 int sampleCounterEEP;
-
 long int firstSample;
 int sampleCycleCounter=0;
 
@@ -106,12 +104,40 @@ void setup(){
                 Serial.begin(9600);
                 Wire.begin();              //turn on i2c bus
                 RTC.begin();               //turn the clock interface on
+                
                 now= RTC.now();            //get the current time   
                       if (now.year()==2000){
                         //the clock has lost its time
                         clockError=1;
                       }
-                      
+ Serial.print("Initializing SD card...");
+  // On the Ethernet Shield, CS is pin 4. It's set as an output by default.
+  // Note that even if it's not used as the CS pin, the hardware SS pin 
+  // (10 on most Arduino boards, 53 on the Mega) must be left as an output 
+  // or the SD library functions will not work. 
+   pinMode(10, OUTPUT);
+   
+  if (!SD.begin(10)) {
+    Serial.println("initialization failed!");
+    return;
+  }
+  Serial.println("initialization done.");
+  
+  // open the file. note that only one file can be open at a time,
+  // so you have to close this one before opening another.
+  File myFile = SD.open("test.txt", FILE_WRITE);
+  
+  // if the file opened okay, write to it:
+  if (myFile) {
+    Serial.print("Writing to test.txt...");
+    myFile.println("testing 1, 2, 3.");
+	// close the file:
+    myFile.close();
+    Serial.println("done.");
+  } else {
+    // if the file didn't open, print an error:
+    Serial.println("error opening test.txt");
+  }
                       
 //EEPROM_writeAnything(60,0);         
 //EEPROM_writeAnything(10,1);                    ///recall the last bottle filled
@@ -125,31 +151,41 @@ void setup(){
                digitalWrite(pump,HIGH);
                pinMode(purge,OUTPUT);
                digitalWrite(purge,HIGH);
+  
                pinMode(cw,OUTPUT);
                pinMode(ccw,OUTPUT);
+   
                digitalWrite(cw,HIGH);
                digitalWrite(ccw,HIGH);
-               pinMode(chipSelect,OUTPUT);
+ 
                
-               
+     
                pinMode(pumpSwitch,INPUT);
                pinMode(gray,INPUT);
                pinMode(purple,INPUT);
                pinMode(nextGapPin,INPUT);
                pinMode(previousGapPin,INPUT);
-               
-               
-               	//ACTIVATE THE SD CARD
-                  digitalWrite(chipSelect,HIGH);   //Tell the SD Card it is needed
-                    if (!SD.begin(chipSelect)) {//IF THE SD DOES NOT START
-                        Serial.println("Card failed, or not present");
-                      } //END  if (!SD.begin(chipSelect))
                       
+  
+               	//ACTIVATE THE SD CARD
+               
+            //   digitalWrite(chipSelect,HIGH);
+               
+              ///    digitalWrite(chipSelect,HIGH);   //Tell the SD Card it is needed
+          //          if (!SD.begin(chipSelect)) {//IF THE SD DOES NOT START
+        //                Serial.println("Card failed, or not present");
+//                      } //END  if (!SD.begin(chipSelect))
+        Serial.println("did we make it here?2");        
+                      delay(100);
+                     
+                  //    SD.begin(10);
                //GET SETTINGS FROM SD CARD
-                getSettings();
+              Serial.println("getSettings");
+              delay(100);
+             //   getSettings();
                 
                //testSeekTime();
-               
+             /*  
                nextSample=makeTime(startSecond,startMinute,startHour,startDay,startMonth,startYear);
                   if (nextSample<now.unixtime() && !completedCycle){
                          while (nextSample<now.unixtime()){
@@ -161,6 +197,7 @@ void setup(){
                 EEPROM_readAnything(10, bottle);
                 EEPROM_readAnything(10,bottle);                    ///recall the last bottle filled
                 EEPROM_readAnything(14,completedCycle);            //recall whether or not a complete cycle had been run
+             */   
                 //if bottle==24 or completedCyle==1 there is a good chance the sample cycle is over
                 //similarly, if nextSample>startTime+24*sampleInterval, there is a good chance something has gone wrong
                 //it is possible that 1.) lost power and missed some samples--check lost power data
@@ -169,6 +206,7 @@ void setup(){
                 //                    4.) it is possible that there was a memory writing problem--in that case the number should be utter bullshit, and maybe distinguishable from first principles
                 //                    5.) it is possible that the RTC has shit the bed. in that case, we need to come up with an auxiliary plan to implement
                 //                          which could mean just taking the sample interval from elapsed time (in the case of no power failure)
+            /*   
                 EEPROM_readAnything(20,startTimeEEP);                 //recall start time
                 EEPROM_readAnything(40,nextSampleEEP);                //recall the time for the next sample
                 Serial.println("EEPROM data:");
@@ -178,71 +216,10 @@ void setup(){
                 Serial.print("startTime: ");                Serial.print(startTimeEEP);     Serial.print("\n");
                 Serial.print("nextSample: ");               Serial.print(nextSampleEEP);    Serial.print("\n");
                 nextSample=nextSampleEEP;
-                
+            */    
                 
                 //USE START TIME FROM SD CARD TO CALCULATE THE START TIME
-                startTime=makeTime(startSecond,startMinute,startHour,startDay,startMonth,startYear); // this assumes a new mission
-                if(startTime==startTimeEEP){
-                             //not a new mission
-                            Serial.println("not a new missions--same start time"); 
-                          }
-                
-                if(startTime!=startTimeEEP){
-                                       if (startTime>startTimeEEP){
-                                                   Serial.println("more recent start time on file than in log");
-                                                   Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
-                                                   findZero();
-                                                   goToBottle(startBottle);
-                                                   EEPROM_writeAnything(20,startTime);      //update start time in memory
-                                                   nextSample=startTime;                    //update next sample time
-                                                   EEPROM_writeAnything(40,nextSample);
-                                                   EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
-                                                 }
-                                       if(startTime<startTimeEEP){
-                                                          Serial.println("start time is earlier than the one in memory, this is odd ...");
-                                                          
-                                                           Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
-                                                       findZero();
-                                                       goToBottle(startBottle);
-                                                       EEPROM_writeAnything(20,startTime);      //update start time in memory
-                                                       nextSample=startTime;                    //update next sample time
-                                                       EEPROM_writeAnything(40,nextSample);
-                                                       EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
-                                                         //could be the result of changing ones mind about deployment timing. 
-                                                         //Perhaps the default should be to accept it as a change of plan, a change in mission. 
-                                                      }
-                          }
-    
-                 
-                          if (nextSampleEEP>nextSample){
-                                      Serial.println("calculated next sample is earlier than the one in EEPROM");
-                                      //write an error message
-                                      EEPROM_writeAnything(40,nextSample);
-                                      //the time in memory for the next sample is in the future, this could indicate 
-                                      //1.) a new program
-                                      //2.) a power cycle
-                                      //3.) a loss of rtc function
-                                      if (clockError==1){
-                                        //enter contingency plan
-                                        Serial.println("enter sampling contingency plan");
-                                       
-                                      }
-                                    }
-                 
-                   //Serial.println(nextSample);
-                             if (nextSample<now.unixtime() && !completedCycle){
-                                           Serial.println("next sample is before *now* ");
-                                                 while (nextSample<now.unixtime()){
-                                                   Serial.println("push-up next sample");
-                                                   fudge++; //keep track of when time has to be added to clock. fudge could turn into pickle, or kettle of fish
-                                                   nextSample+=sampleInterval*60;    
-                                                    Serial.print(now.unixtime()); Serial.print(" ");
-                                                    Serial.print(nextSample); Serial.print(" ");
-                                                    Serial.print(now.unixtime()-nextSample); Serial.print("\n");     
-                                           } 
-                                           Serial.println(nextSample);
-                                           EEPROM_writeAnything(40,nextSample);
-                                         }
+            
  }
 
 void loop(){
@@ -1015,3 +992,69 @@ void difference(long int one, long int two){    //two is "now" and one is nextSa
     
    Serial.println(countDown);
     }
+    
+        void initializeThings(){
+           now= RTC.now();
+                startTime=makeTime(startSecond,startMinute,startHour,startDay,startMonth,startYear); // this assumes a new mission
+                if(startTime==startTimeEEP){
+                             //not a new mission
+                            Serial.println("not a new missions--same start time"); 
+                          }
+                
+                if(startTime!=startTimeEEP){
+                                       if (startTime>startTimeEEP){
+                                                   Serial.println("more recent start time on file than in log");
+                                                   Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
+                                                   findZero();
+                                                   goToBottle(startBottle);
+                                                   EEPROM_writeAnything(20,startTime);      //update start time in memory
+                                                   nextSample=startTime;                    //update next sample time
+                                                   EEPROM_writeAnything(40,nextSample);
+                                                   EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
+                                                 }
+                                       if(startTime<startTimeEEP){
+                                                          Serial.println("start time is earlier than the one in memory, this is odd ...");
+                                                          
+                                                           Serial.println("assuming new mission, resetting distributor arm, bottle number, startTime and nextSample Times");
+                                                       findZero();
+                                                       goToBottle(startBottle);
+                                                       EEPROM_writeAnything(20,startTime);      //update start time in memory
+                                                       nextSample=startTime;                    //update next sample time
+                                                       EEPROM_writeAnything(40,nextSample);
+                                                       EEPROM_writeAnything(14,0); //write completed cycle to be 0 so pumping is carried out
+                                                         //could be the result of changing ones mind about deployment timing. 
+                                                         //Perhaps the default should be to accept it as a change of plan, a change in mission. 
+                                                      }
+                          }
+    
+                 
+                          if (nextSampleEEP>nextSample){
+                                      Serial.println("calculated next sample is earlier than the one in EEPROM");
+                                      //write an error message
+                                      EEPROM_writeAnything(40,nextSample);
+                                      //the time in memory for the next sample is in the future, this could indicate 
+                                      //1.) a new program
+                                      //2.) a power cycle
+                                      //3.) a loss of rtc function
+                                      if (clockError==1){
+                                        //enter contingency plan
+                                        Serial.println("enter sampling contingency plan");
+                                       
+                                      }
+                                    }
+                 
+                   //Serial.println(nextSample);
+                             if (nextSample<now.unixtime() && !completedCycle){
+                                           Serial.println("next sample is before *now* ");
+                                                 while (nextSample<now.unixtime()){
+                                                   Serial.println("push-up next sample");
+                                                   fudge++; //keep track of when time has to be added to clock. fudge could turn into pickle, or kettle of fish
+                                                   nextSample+=sampleInterval*60;    
+                                                    Serial.print(now.unixtime()); Serial.print(" ");
+                                                    Serial.print(nextSample); Serial.print(" ");
+                                                    Serial.print(now.unixtime()-nextSample); Serial.print("\n");     
+                                           } 
+                                           Serial.println(nextSample);
+                                           EEPROM_writeAnything(40,nextSample);
+                                         }
+                }
